@@ -1,0 +1,103 @@
+---
+title: "Machine Learning Final Project"
+author: "Pedro Camacho"
+date: "7 July 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Brief description of the project
+
+Using data from wareables hardware, we are going to train a model to predict when a given excersise is done in a good manner. For doing this we are goin to use the data colleted by this [organization](http://groupware.les.inf.puc-rio.br/har) and especifically we are going to use two datasets one for [training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and one for [testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+
+The **"classe"** variable is the independend one and we may use any other variable as predictors in our model. After we have tested our model we need to verify it with 20 online questions on a quiz setting given on the coursera webpage. 
+
+## Downloading and reading the data
+
+The data has a values "#DIV/0!" that should be considered as NA. Also for the sake of this data a empty registry is considered as NA. 
+
+```{r, cache = TRUE}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                     na.strings = c("NA", "#DIV/0!", "")) 
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                    na.strings = c("NA", "#DIV/0!", ""))
+```
+
+## Data Description
+### if you are familiar with the dataset feel free to jump this part 
+
+In order to be concise I am not going to display the exploratory data analysis and only will describe what I believe to be the most important points. Both the traininig and test set have the same number of colummns, but in the test the "classe" variable is omitted and replaced with the quiz's question number. The training set has **`r dim(training)[1]`** observations and the test set **`r dim(testing)[1]`**. this 20 observations need to be predicted in order to fill the final project quiz. 
+
+## preparing the data for analysis 
+
+The dataset is already clean and tidy. Since we are going to be working with random forest algorithm, we need eliminate all the collumns that have NA values. Hopefully this will not limit our model since we have 160 variables to choose from. Also we are going to eliminate some variables that don't add to the final model (the first 7 variables) in order to have a faster fitting (the process was taking too long in the first run).
+
+```{r, partition,cache = TRUE}
+training <- training[,-(1:7)]
+nacolumns <- apply(training, 2, anyNA) #selecting columns that have some NA values
+training2 <- training[,(!nacolumns)]
+rm_col <- colnames(training2) %in% c("X", "user_name", "cvtd_timestamp", "new_window")
+training3 <- training2[,!rm_col]
+```
+
+We end up with `r length(names(training3))` variables with no NA values. Now in order to test our model we are goint to divide our dataset into training and validation. 
+
+```{r, validation, cache = TRUE}
+suppressMessages(library(caret, quietly = TRUE))
+set.seed(2444)
+inTrain <- createDataPartition(training3$classe, p = 0.7, list = FALSE)
+train_df <- training3[inTrain,]
+validation <- training3[-inTrain,]
+```
+
+## tunning PC for faster training
+
+There are a couple of tricks for speed-up the process of training. Since the random forest and gbm were taken to much time to run, I look for way to speed up the process. I found this great [post](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md) explaning how this optimization works. By doing this changes there will be a trade off between the accuracy and speed, but the decrease on the former is negligible.
+
+```{r, speedup, cache = TRUE}
+suppressMessages(library(parallel, quietly = TRUE)) ;suppressMessages(library(doParallel, quietly = TRUE)) #libraries to control the way R uses the processor
+cluster <- makeCluster(detectCores() - 2) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+
+
+## Training
+
+We are going to use rf and gbm models, calculate their accuracy and pick the best one. 
+
+```{r, training, cache = TRUE}
+suppressMessages(library(randomForest, quietly = TRUE))
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE) # this is going to be used as an argument in the train function
+x <- train_df[,-53]; y <- train_df[,53]
+set.seed(2444)
+rf <- randomForest(classe ~. , data = train_df)
+set.seed(2444) #we need to set the seed each time we are going to use a random process 
+gbm <- suppressMessages(train( classe ~., data = train_df, method = "gbm"))
+stopCluster(cluster) # to set the processor usage back to normal
+registerDoSEQ() #to set the processor usage back to normal
+```
+
+## Models' Accuracy
+
+Now that we have two model we can find the accuary of each one and select one of them to the final model. 
+
+```{r, accuracy}
+rf_accu <- confusionMatrix(predict(rf, validation), validation$classe)[[3]][[1]]
+gbm_accu <- confusionMatrix(predict(gbm, validation), validation$classe)[[3]][[1]]
+data.frame( Method = c("RF", "GBM"), Accurary = c(rf_accu, gbm_accu))
+```
+
+As we can see both methods give accuracy above 95% and particularly random forest gives **`r, rf_accu`** of accuracy, wich would be enough to predict correctly all 20 observations on the test set with **`r rf_accu ^ 20*100`** percent probability. Since randowm forest gives us accuracy high enough to solve the problem at hand, there is no need to complicate the model further, therefore we are going to use **Random Forest to predict the test set**.
+
+## predicting the testting dataset
+
+the following are the prediction for the data set
+
+``` {r}
+predict(rf, testing)
+```
+
+
